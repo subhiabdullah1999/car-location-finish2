@@ -17,6 +17,7 @@ class CarSecurityService {
   double _totalDistance = 0.0;
   Position? _lastPosition;
   StreamSubscription<Position>? _positionStream;
+  bool _isTestMode = false; // فعله لتجربة العداد بدون حركة
   
   // --- ميزة تنبيه تجاوز السرعة الجديدة ---
   double _speedLimit = 90.0; // الحد الافتراضي
@@ -274,12 +275,7 @@ class CarSecurityService {
     _listenForResetCommand(carID);
   }
 
-  void _startTripTracking(String carId) async {
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-
+ void _startTripTracking(String carId) async {
     const LocationSettings locationSettings = LocationSettings(
       accuracy: LocationAccuracy.high,
       distanceFilter: 2, 
@@ -288,22 +284,31 @@ class CarSecurityService {
     _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings)
         .listen((Position position) {
       
+      // --- حساب السرعة الحقيقية ---
       double speedKmh = position.speed * 3.6;
       if (speedKmh < 0.5) speedKmh = 0; 
+
+      // --- [وضع الاختبار الذاتي] ---
+      // إذا كنت تريد تجربة العداد وأنت ثابت، سنفترض أن السرعة 100 كم/س إذا هززت الهاتف بقوة
+      if (_isTestMode && speedKmh == 0) speedKmh = 105.0; 
 
       if (speedKmh > _maxSpeed) {
         _maxSpeed = speedKmh;
       }
 
-      // --- منطق تنبيه تجاوز السرعة الجديد ---
+      // --- [تنبيه تجاوز السرعة القوي] ---
+      // نرسل التنبيه كـ 'alert' لكي يظهر باللون الأحمر ويصدر صوت الإنذار لدى الأدمن
       if (speedKmh > _speedLimit && !_speedAlertSent) {
-        _send('alert', '⚠️ تنبيه: تجاوز السرعة المحددة (${_speedLimit.toInt()} كم/س)! السرعة الحالية: ${speedKmh.toInt()}');
+        _send('alert', '🚨 تحذير: تجاوز السرعة المسموحة! السيارة تسير بسرعة ${speedKmh.toInt()} كم/س (الحد المسموح: ${_speedLimit.toInt()})', 
+          lat: position.latitude, 
+          lng: position.longitude
+        );
         _speedAlertSent = true;
       } else if (speedKmh < (_speedLimit - 5)) {
-        _speedAlertSent = false; // إعادة التفعيل عند انخفاض السرعة لضمان عدم تكرار التنبيهات
+        _speedAlertSent = false; 
       }
-      // ------------------------------------
 
+      // حساب المسافة
       if (_lastPosition != null) {
         double distanceInMeters = Geolocator.distanceBetween(
           _lastPosition!.latitude, _lastPosition!.longitude,
@@ -313,11 +318,12 @@ class CarSecurityService {
       }
       _lastPosition = position;
 
+      // تحديث Firebase
       _dbRef.child('devices/$carId/trip_data').update({
-        'current_speed': speedKmh,
+        'current_speed': speedKmh.toInt(),
         'max_speed': _maxSpeed,
         'total_distance': _totalDistance,
-        'avg_speed': speedKmh > 1 ? (speedKmh + 20) / 2 : 0, 
+        'avg_speed': speedKmh > 1 ? (_maxSpeed + speedKmh) / 2 : 0, 
         'lat': position.latitude,
         'lng': position.longitude,
         'last_update': ServerValue.timestamp,
@@ -396,7 +402,7 @@ class CarSecurityService {
     _vibeToggleSub?.cancel();
     _geoSub?.cancel();
     _positionStream?.cancel();
-    _limitSub?.cancel(); // إيقاف الاستماع لحد السرعة
+    _limitSub?.cancel(); 
     
     isSystemActive = false;
     _isCallingNow = false;
