@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'dart:math' as math;
-import 'package:fl_chart/fl_chart.dart'; // إضافة مكتبة الرسم البياني
+import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+
 
 class DashboardPage extends StatefulWidget {
   final String carID;
@@ -12,6 +15,12 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage> {
+  bool _isTestModeEnabled = false;
+  // --- متغيرات الخريطة والموقع ---
+  double _lat = 0.0;
+  double _lng = 0.0;
+  final MapController _mapController = MapController();
+  
   final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
   double _currentSpeed = 0.0;
   double _totalDistance = 0.0;
@@ -19,10 +28,9 @@ class _DashboardPageState extends State<DashboardPage> {
   double _maxSpeed = 0.0;
   
   // --- ميزات التحكم في السرعة والرسم البياني المضافة ---
-  double _speedLimit = 90.0; // قيمة افتراضية لحد السرعة
+  double _speedLimit = 90.0; 
   List<FlSpot> _speedDataPoints = []; 
   int _timerCounter = 0;
-  // --------------------------------------------------
 
   @override
   void initState() {
@@ -31,7 +39,14 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   void _listenToTripData() {
-    // الاستماع لقيمة حد السرعة المحددة في قاعدة البيانات
+    _dbRef.child('devices/${widget.carID}/test_mode').onValue.listen((event) {
+      if (mounted) {
+        setState(() {
+          _isTestModeEnabled = event.snapshot.value == true;
+        });
+      }
+    });
+    // 1. الاستماع لحد السرعة
     _dbRef.child('devices/${widget.carID}/speed_limit').onValue.listen((event) {
       if (event.snapshot.value != null && mounted) {
         setState(() {
@@ -40,21 +55,31 @@ class _DashboardPageState extends State<DashboardPage> {
       }
     });
 
+    // 2. الاستماع لبيانات الرحلة والموقع المباشر
     _dbRef.child('devices/${widget.carID}/trip_data').onValue.listen((event) {
       if (event.snapshot.value != null && mounted) {
         var data = Map<dynamic, dynamic>.from(event.snapshot.value as Map);
+        
         setState(() {
           _currentSpeed = double.tryParse(data['current_speed'].toString()) ?? 0.0;
           _totalDistance = double.tryParse(data['total_distance'].toString()) ?? 0.0;
           _avgSpeed = double.tryParse(data['avg_speed'].toString()) ?? 0.0;
           _maxSpeed = double.tryParse(data['max_speed'].toString()) ?? 0.0;
+          
+          // تحديث الإحداثيات للخريطة
+          _lat = double.tryParse(data['lat'].toString()) ?? 0.0;
+          _lng = double.tryParse(data['lng'].toString()) ?? 0.0;
 
-          // تحديث بيانات الرسم البياني لحظياً
+          // تحريك الكاميرا لتتبع السيارة تلقائياً
+          if (_lat != 0 && _lng != 0) {
+            _mapController.move(LatLng(_lat, _lng), 15.0);
+          }
+
+          // تحديث الرسم البياني كل ثانيتين لتقليل الجهد
           _timerCounter++;
-          _speedDataPoints.add(FlSpot(_timerCounter.toDouble(), _currentSpeed));
-          // الاحتفاظ بآخر 30 نقطة فقط لضمان سلاسة العرض
-          if (_speedDataPoints.length > 30) {
-            _speedDataPoints.removeAt(0);
+          if (_timerCounter % 2 == 0) { 
+             _speedDataPoints.add(FlSpot(_timerCounter.toDouble(), _currentSpeed));
+             if (_speedDataPoints.length > 20) _speedDataPoints.removeAt(0);
           }
         });
       }
@@ -68,7 +93,6 @@ class _DashboardPageState extends State<DashboardPage> {
       'max_speed': 0.0,
       'reset_timestamp': ServerValue.timestamp,
     });
-    // تصفير الرسم البياني أيضاً عند تصفير العداد
     setState(() {
       _speedDataPoints.clear();
       _timerCounter = 0;
@@ -78,8 +102,6 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    
-    // تحديد اللون بناءً على ما إذا كانت السرعة تجاوزت الحد المسموح
     bool isOverSpeed = _currentSpeed > _speedLimit;
     Color dynamicSpeedColor = isOverSpeed ? Colors.redAccent : (isDark ? Colors.white : Colors.black87);
 
@@ -94,7 +116,7 @@ class _DashboardPageState extends State<DashboardPage> {
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              // 1. عداد السرعة مع المؤشر
+              // 1. عداد السرعة
               Center(
                 child: Stack(
                   alignment: Alignment.center,
@@ -116,17 +138,52 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
               const SizedBox(height: 25),
 
-              // 2. واجهة التحكم في حد السرعة (Slider) - ميزة جديدة
+              // 2. التحكم في حد السرعة
               _buildSpeedLimitSlider(isDark),
               const SizedBox(height: 25),
 
-              // 3. الرسم البياني
+              // 3. الرسم البياني اللحظي
               const Text("تحليل السرعة اللحظي", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
               const SizedBox(height: 10),
               _buildSpeedChart(isDark, isOverSpeed),
               const SizedBox(height: 25),
 
-              // 4. بطاقات المعلومات
+              // 4. الخريطة المباشرة (الميزة الجديدة)
+              const Text("الموقع المباشر للسيارة", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+              _buildLiveMap(isDark),
+              const SizedBox(height: 25),
+              // --- ويدجت وضع الاختبار المضافة ---
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
+                decoration: BoxDecoration(
+                  color: _isTestModeEnabled ? Colors.orange.withOpacity(0.1) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _isTestModeEnabled ? Colors.orange : Colors.grey.withOpacity(0.3)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.science, color: _isTestModeEnabled ? Colors.orange : Colors.grey),
+                        const SizedBox(width: 10),
+                        const Text("وضع اختبار العداد (وهمي)", style: TextStyle(fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    Switch(
+                      value: _isTestModeEnabled,
+                      activeColor: Colors.orange,
+                      onChanged: (val) {
+                        _dbRef.child('devices/${widget.carID}/test_mode').set(val);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // 5. بطاقات المعلومات
               _infoCard("المسافة المقطوعة الكلية", "${_totalDistance.toStringAsFixed(2)} كم", Icons.route, isDark),
               const SizedBox(height: 12),
               _infoCard("أقصى سرعة مسجلة", "${_maxSpeed.toStringAsFixed(1)} كم/ساعة", Icons.trending_up, isDark),
@@ -134,7 +191,7 @@ class _DashboardPageState extends State<DashboardPage> {
               _infoCard("متوسط سرعة الرحلة", "${_avgSpeed.toStringAsFixed(1)} كم/ساعة", Icons.speed, isDark),
               const SizedBox(height: 30),
 
-              // 5. زر التصفير
+              // 6. زر التصفير
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.redAccent,
@@ -152,7 +209,58 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  // ويدجت منزلق التحكم في حد السرعة
+  // ويدجت الخريطة المباشرة
+  Widget _buildLiveMap(bool isDark) {
+    return Container(
+      height: 220,
+      width: double.infinity,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: isDark ? Colors.white10 : Colors.blue.withOpacity(0.2), width: 2),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: FlutterMap(
+          mapController: _mapController,
+          options: MapOptions(
+            initialCenter: LatLng(_lat, _lng),
+            initialZoom: 15.0,
+          ),
+          children: [
+            TileLayer(
+              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              userAgentPackageName: 'com.example.car_location',
+              tileBuilder: isDark ? _darkModeTileBuilder : null,
+            ),
+            MarkerLayer(
+              markers: [
+                Marker(
+                  point: LatLng(_lat, _lng),
+                  width: 50,
+                  height: 50,
+                  child: const Icon(Icons.directions_car, color: Colors.red, size: 40),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // فلتر الوضع المظلم للخريطة
+  Widget _darkModeTileBuilder(BuildContext context, Widget tile, TileImage tileImage) {
+    return ColorFiltered(
+      colorFilter: const ColorFilter.matrix([
+        -1.0, 0.0, 0.0, 0.0, 255.0,
+        0.0, -1.0, 0.0, 0.0, 255.0,
+        0.0, 0.0, -1.0, 0.0, 255.0,
+        0.0, 0.0, 0.0, 1.0, 0.0,
+      ]),
+      child: tile,
+    );
+  }
+
   Widget _buildSpeedLimitSlider(bool isDark) {
     return Container(
       padding: const EdgeInsets.all(15),
@@ -181,7 +289,6 @@ class _DashboardPageState extends State<DashboardPage> {
               setState(() => _speedLimit = value);
             },
             onChangeEnd: (double value) {
-              // تحديث القيمة في Firebase فور الانتهاء من السحب
               _dbRef.child('devices/${widget.carID}/speed_limit').set(value.toInt());
             },
           ),
@@ -192,7 +299,6 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  // ويدجت الرسم البياني
   Widget _buildSpeedChart(bool isDark, bool isOverSpeed) {
     return Container(
       height: 150,

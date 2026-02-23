@@ -347,6 +347,8 @@ class _AdminPageState extends State<AdminPage> {
           _customActionBtn("مراقبة الرحلة", Icons.speed, Colors.orange, isDark, () {
             Navigator.push(context, MaterialPageRoute(builder: (context) => DashboardPage(carID: _carID!)));
           }),
+          _actionBtn(9, "نقطة الاتصال", Icons.wifi_tethering, Colors.indigo, isDark),
+          _actionBtn(10, "إغلاق الاتصال", Icons.portable_wifi_off, Colors.grey, isDark),
         ],
       ),
     ],

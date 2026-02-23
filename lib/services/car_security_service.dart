@@ -1,4 +1,7 @@
+import 'dart:math' as math;
+
 import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:battery_plus/battery_plus.dart';
@@ -11,6 +14,7 @@ import 'dart:io';
 class CarSecurityService {
   static final CarSecurityService _instance = CarSecurityService._internal();
   factory CarSecurityService() => _instance;
+  static const platform = MethodChannel('hasba.security/hotspot');
   
   // --- متغيرات تتبع الرحلة والسرعة القصوى ---
   double _maxSpeed = 0.0; 
@@ -24,6 +28,9 @@ class CarSecurityService {
   bool _speedAlertSent = false; // لمنع تكرار الإشعارات
   StreamSubscription? _limitSub;
   // ----------------------------------------
+
+  // متغير مضاف للتحكم في مؤقت وضع الاختبار بدقة
+  Timer? _testTimer;
 
   CarSecurityService._internal();
 
@@ -267,7 +274,63 @@ class CarSecurityService {
             await initSecuritySystem();
             _send('status', '✅ تمت إعادة التشغيل بنجاح؛ النظام الآن نشط');
             break;
+
+        case 9:
+            _send('status', '🌐 جاري فتح إعدادات الشبكة في السيارة...');
+            try {
+              final String result = await platform.invokeMethod('enableHotspot');
+              
+              if (result == "SUCCESS") {
+                final String details = await platform.invokeMethod('getHotspotDetails');
+                _send('status', '✅ تم التفعيل بنجاح\n$details');
+              } else if (result == "OPENED_SETTINGS") {
+                _send('status', '⚙️ تم فتح صفحة الـ Hotspot في هاتف السيارة بنجاح. يرجى تفعيل المفتاح يدوياً.');
+              } else if (result == "NEED_PERMISSION_UI") {
+                _send('status', '⚠️ يرجى منح صلاحية تعديل الإعدادات في هاتف السيارة أولاً');
+              } else {
+                _send('status', '❌ تعذر التحكم: $result');
+              }
+            } catch (e) {
+              _send('status', '❌ خطأ في النظام: $e');
+            }
+            break;
+
+            case 10:
+            await platform.invokeMethod('disableHotspot'); 
+            _send('status', '📴 تم إيقاف نقطة الاتصال لتوفير البطارية');
+            break;
         }
+      }
+    });
+
+    // --- تعديل مستمع وضع الاختبار (الإصلاح الجديد مع الحفاظ على كل السطور) ---
+    _dbRef.child('devices/$carID/test_mode').onValue.listen((event) {
+      bool isTest = event.snapshot.value == true;
+      _testTimer?.cancel(); // إيقاف أي مؤقت سابق فوراً
+
+      if (isTest) {
+        _send('status', '🧪 تم تفعيل وضع الاختبار؛ سيتم إرسال سرعات وهمية الآن');
+        _testTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+          if (event.snapshot.value != true) { 
+            timer.cancel(); 
+            return; 
+          }
+          
+          double mockSpeed = 60.0 + math.Random().nextDouble() * 60.0;
+          
+          // تحسين منطق تحديث السرعة القصوى (الآن لا تنزل أبداً)
+          if (mockSpeed > _maxSpeed) {
+            _maxSpeed = mockSpeed;
+          }
+
+          _dbRef.child('devices/$carID/trip_data').update({
+            'current_speed': mockSpeed.toInt(),
+            'max_speed': _maxSpeed.toInt(), 
+            'last_update': ServerValue.timestamp,
+          });
+        });
+      } else {
+        _send('status', '🔌 تم إيقاف وضع الاختبار والعودة للبيانات الحقيقية');
       }
     });
 
@@ -275,31 +338,31 @@ class CarSecurityService {
     _listenForResetCommand(carID);
   }
 
- void _startTripTracking(String carId) async {
-    const LocationSettings locationSettings = LocationSettings(
+  void _startTripTracking(String carId) async {
+    LocationSettings locationSettings = AndroidSettings(
       accuracy: LocationAccuracy.high,
-      distanceFilter: 2, 
+      distanceFilter: 2,
+      foregroundNotificationConfig: ForegroundNotificationConfig(
+        notificationTitle: "جاري تتبع الرحلة",
+        notificationText: "نظام HASBA يراقب السرعة الآن",
+      )
     );
 
     _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings)
         .listen((Position position) {
       
-      // --- حساب السرعة الحقيقية ---
-      double speedKmh = position.speed * 3.6;
-      if (speedKmh < 0.5) speedKmh = 0; 
+      double speedKmh = position.speed > 0 ? position.speed * 3.6 : 0.0;
+      
+      if (speedKmh < 0.8) speedKmh = 0; 
 
-      // --- [وضع الاختبار الذاتي] ---
-      // إذا كنت تريد تجربة العداد وأنت ثابت، سنفترض أن السرعة 100 كم/س إذا هززت الهاتف بقوة
       if (_isTestMode && speedKmh == 0) speedKmh = 105.0; 
 
       if (speedKmh > _maxSpeed) {
         _maxSpeed = speedKmh;
       }
 
-      // --- [تنبيه تجاوز السرعة القوي] ---
-      // نرسل التنبيه كـ 'alert' لكي يظهر باللون الأحمر ويصدر صوت الإنذار لدى الأدمن
       if (speedKmh > _speedLimit && !_speedAlertSent) {
-        _send('alert', '🚨 تحذير: تجاوز السرعة المسموحة! السيارة تسير بسرعة ${speedKmh.toInt()} كم/س (الحد المسموح: ${_speedLimit.toInt()})', 
+        _send('alert', '🚨 تحذير: تجاوز السرعة المسموحة! السيارة تسير بسرعة ${speedKmh.toInt()} كم/س', 
           lat: position.latitude, 
           lng: position.longitude
         );
@@ -308,20 +371,20 @@ class CarSecurityService {
         _speedAlertSent = false; 
       }
 
-      // حساب المسافة
       if (_lastPosition != null) {
         double distanceInMeters = Geolocator.distanceBetween(
           _lastPosition!.latitude, _lastPosition!.longitude,
           position.latitude, position.longitude,
         );
-        _totalDistance += (distanceInMeters / 1000);
+        if (distanceInMeters < 500) { 
+            _totalDistance += (distanceInMeters / 1000);
+        }
       }
       _lastPosition = position;
 
-      // تحديث Firebase
       _dbRef.child('devices/$carId/trip_data').update({
         'current_speed': speedKmh.toInt(),
-        'max_speed': _maxSpeed,
+        'max_speed': _maxSpeed.toInt(), // تعديل لضمان إرسال القيمة الصحيحة
         'total_distance': _totalDistance,
         'avg_speed': speedKmh > 1 ? (_maxSpeed + speedKmh) / 2 : 0, 
         'lat': position.latitude,
@@ -403,6 +466,7 @@ class CarSecurityService {
     _geoSub?.cancel();
     _positionStream?.cancel();
     _limitSub?.cancel(); 
+    _testTimer?.cancel(); // إيقاف مؤقت الاختبار عند إطفاء النظام
     
     isSystemActive = false;
     _isCallingNow = false;
