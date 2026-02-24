@@ -5,7 +5,6 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
-
 class DashboardPage extends StatefulWidget {
   final String carID;
   const DashboardPage({super.key, required this.carID});
@@ -21,6 +20,9 @@ class _DashboardPageState extends State<DashboardPage> {
   double _lng = 0.0;
   final MapController _mapController = MapController();
   
+  // قائمة لتخزين نقاط المسار (الميزة المطلوبة)
+  List<LatLng> _routePoints = [];
+
   final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
   double _currentSpeed = 0.0;
   double _totalDistance = 0.0;
@@ -46,6 +48,7 @@ class _DashboardPageState extends State<DashboardPage> {
         });
       }
     });
+
     // 1. الاستماع لحد السرعة
     _dbRef.child('devices/${widget.carID}/speed_limit').onValue.listen((event) {
       if (event.snapshot.value != null && mounted) {
@@ -70,9 +73,14 @@ class _DashboardPageState extends State<DashboardPage> {
           _lat = double.tryParse(data['lat'].toString()) ?? 0.0;
           _lng = double.tryParse(data['lng'].toString()) ?? 0.0;
 
-          // تحريك الكاميرا لتتبع السيارة تلقائياً
+          // إضافة النقطة الحالية لمسار الرحلة إذا كانت مختلفة عن الأخيرة
           if (_lat != 0 && _lng != 0) {
-            _mapController.move(LatLng(_lat, _lng), 15.0);
+            LatLng newPoint = LatLng(_lat, _lng);
+            if (_routePoints.isEmpty || _routePoints.last != newPoint) {
+              _routePoints.add(newPoint);
+            }
+            // تحريك الكاميرا لتتبع السيارة تلقائياً
+            _mapController.move(newPoint, 15.0);
           }
 
           // تحديث الرسم البياني كل ثانيتين لتقليل الجهد
@@ -95,6 +103,7 @@ class _DashboardPageState extends State<DashboardPage> {
     });
     setState(() {
       _speedDataPoints.clear();
+      _routePoints.clear(); // مسح خط المسار عند تصفير الرحلة
       _timerCounter = 0;
     });
   }
@@ -148,12 +157,13 @@ class _DashboardPageState extends State<DashboardPage> {
               _buildSpeedChart(isDark, isOverSpeed),
               const SizedBox(height: 25),
 
-              // 4. الخريطة المباشرة (الميزة الجديدة)
-              const Text("الموقع المباشر للسيارة", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
+              // 4. الخريطة المباشرة مع رسم المسار
+              const Text("الموقع المباشر مع خط المسار", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
               const SizedBox(height: 10),
               _buildLiveMap(isDark),
               const SizedBox(height: 25),
-              // --- ويدجت وضع الاختبار المضافة ---
+
+              // --- ويدجت وضع الاختبار ---
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
                 decoration: BoxDecoration(
@@ -209,7 +219,7 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  // ويدجت الخريطة المباشرة
+  // ويدجت الخريطة المباشرة مع رسم المسار
   Widget _buildLiveMap(bool isDark) {
     return Container(
       height: 220,
@@ -231,6 +241,17 @@ class _DashboardPageState extends State<DashboardPage> {
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'com.example.car_location',
               tileBuilder: isDark ? _darkModeTileBuilder : null,
+            ),
+            // طبقة رسم الخط (المسار)
+            PolylineLayer(
+              polylines: [
+                Polyline(
+                  points: _routePoints,
+                  strokeWidth: 4.0,
+                  color: Colors.blue.withOpacity(0.7),
+                  isDotted: false, // يمكن جعلها true إذا أردت المسار منقطاً
+                ),
+              ],
             ),
             MarkerLayer(
               markers: [

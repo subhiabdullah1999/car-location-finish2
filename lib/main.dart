@@ -25,13 +25,9 @@ void main() async {
   await Firebase.initializeApp();
   FirebaseDatabase.instance.databaseURL = "https://car-location-67e15-default-rtdb.firebaseio.com/";
 
-  // --- تصحيح الخطأ هنا ---
-  // تم تغيير التسمية لتطابق المتغير المستخدم في InitializationSettings
+  // إعداد قنوات الإشعارات للأندرويد
   const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
-  
-  // إزالة const إذا واجهت مشكلة في التجميع، لكن التسمية هي السبب الأساسي
   const InitializationSettings initializationSettings = InitializationSettings(android: initializationSettingsAndroid);
-  
   await flutterLocalNotificationsPlugin.initialize(initializationSettings);
 
   SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -40,6 +36,9 @@ void main() async {
   bool isDark = prefs.getBool('dark_mode') ?? false;
   
   themeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
+
+  // استدعاء السماحيات بشكل آمن مرة واحدة عند التشغيل
+  await requestPermissions();
 
   // إذا كان المستخدم "أدمن"، نبدأ مراقبة الرادار فوراً
   if (userType == 'admin' && savedID != null) {
@@ -99,7 +98,7 @@ Future<void> _triggerUrgentNotification(String type, String msg) async {
   );
 }
 
-// --- كلاس التطبيق الرئيسي مع إضافة منطق البصمة ---
+// --- كلاس التطبيق الرئيسي مع إضافة مراقب الحالة (Observer) ---
 class HasbaApp extends StatefulWidget {
   final String? savedID;
   final String? userType;
@@ -109,17 +108,34 @@ class HasbaApp extends StatefulWidget {
   State<HasbaApp> createState() => _HasbaAppState();
 }
 
-class _HasbaAppState extends State<HasbaApp> {
-  bool _isAuthenticated = false; // هل تم التحقق من الهوية؟
+class _HasbaAppState extends State<HasbaApp> with WidgetsBindingObserver {
+  bool _isAuthenticated = false; 
   final LocalAuthentication _auth = LocalAuthentication();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkBiometricPreference();
   }
 
-  // فحص هل المستخدم فعل خيار البصمة من الإعدادات؟
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkBiometricPreference();
+    } else if (state == AppLifecycleState.paused) {
+      setState(() {
+        _isAuthenticated = false;
+      });
+    }
+  }
+
   Future<void> _checkBiometricPreference() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     bool isBiometricEnabled = prefs.getBool('biometric_enabled') ?? false;
@@ -127,13 +143,14 @@ class _HasbaAppState extends State<HasbaApp> {
     if (isBiometricEnabled) {
       _authenticateUser();
     } else {
-      setState(() {
-        _isAuthenticated = true; // الدخول مباشرة إذا كانت الخدمة معطلة
-      });
+      if(mounted) {
+        setState(() {
+          _isAuthenticated = true; 
+        });
+      }
     }
   }
 
-  // تنفيذ عملية التحقق من البصمة
   Future<void> _authenticateUser() async {
     try {
       bool authenticated = await _auth.authenticate(
@@ -143,15 +160,18 @@ class _HasbaAppState extends State<HasbaApp> {
           biometricOnly: true,
         ),
       );
-      setState(() {
-        _isAuthenticated = authenticated;
-      });
+      if(mounted) {
+        setState(() {
+          _isAuthenticated = authenticated;
+        });
+      }
     } catch (e) {
       print("خطأ في التحقق الحيوي: $e");
-      // في حال حدوث خطأ تقني، يمكن السماح بالدخول أو طلب PIN
-      setState(() {
-        _isAuthenticated = true; 
-      });
+      if(mounted) {
+        setState(() {
+          _isAuthenticated = true; 
+        });
+      }
     }
   }
 
@@ -178,7 +198,6 @@ class _HasbaAppState extends State<HasbaApp> {
             appBarTheme: const AppBarTheme(backgroundColor: Color(0xFF1F1F1F), foregroundColor: Colors.white),
           ),
           themeMode: currentMode,
-          // التعديل هنا: إذا لم يتم التحقق تظهر شاشة سوداء/انتظار حتى نجاح البصمة
           home: _isAuthenticated 
               ? SplashScreen(savedID: widget.savedID, userType: widget.userType)
               : _biometricLockScreen(),
@@ -187,20 +206,32 @@ class _HasbaAppState extends State<HasbaApp> {
     );
   }
 
-  // شاشة حماية تظهر أثناء انتظار البصمة
   Widget _biometricLockScreen() {
     return Scaffold(
+      backgroundColor: const Color(0xFF121212), 
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.lock_outline, size: 80, color: Colors.blue),
+            const Icon(Icons.lock_person, size: 100, color: Colors.blue),
             const SizedBox(height: 20),
-            const Text("التطبيق مغلق للأمان", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text(
+              "نظام HASBA مغلق للأمان",
+              style: TextStyle(fontSize: 20, color: Colors.white, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 10),
-            ElevatedButton(
+            const Text(
+              "يرجى استخدام البصمة للدخول",
+              style: TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 40),
+            ElevatedButton.icon(
               onPressed: _authenticateUser,
-              child: const Text("اضغط للمحاولة مرة أخرى"),
+              icon: const Icon(Icons.fingerprint),
+              label: const Text("فتح القفل الآن"),
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size(200, 50),
+              ),
             ),
           ],
         ),
@@ -209,14 +240,23 @@ class _HasbaAppState extends State<HasbaApp> {
   }
 }
 
+// الحل الجذري لمشكلة تعليق البطارية والسماحيات
 Future<void> requestPermissions() async {
+  // أولاً: طلب سماحية الإشعارات لأنها أساسية
   await Permission.notification.request();
+
+  // ثانياً: فحص حالة سماحية البطارية قبل طلبها لتجنب التكرار والتعليق
+  if (!await Permission.ignoreBatteryOptimizations.isGranted) {
+    await Permission.ignoreBatteryOptimizations.request();
+  }
+
+  // ثالثاً: طلب باقي السماحيات في دفعة واحدة
   Map<Permission, PermissionStatus> statuses = await [
     Permission.location,
     Permission.phone,
     Permission.sensors,
-    Permission.ignoreBatteryOptimizations, 
     Permission.systemAlertWindow, 
   ].request();
+  
   print("Permissions status: $statuses");
 }

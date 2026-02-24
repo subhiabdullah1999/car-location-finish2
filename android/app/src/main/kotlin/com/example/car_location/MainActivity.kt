@@ -1,16 +1,16 @@
 package com.example.car_location
 
 import android.content.Context
-import android.content.Intent // استيراد ضروري للانتقال للشاشات
+import android.content.Intent 
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiConfiguration
 import android.os.Build
 import android.util.Log
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity 
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-class MainActivity: FlutterActivity() {
+class MainActivity: FlutterFragmentActivity() {
     private val CHANNEL = "hasba.security/hotspot"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -41,23 +41,22 @@ class MainActivity: FlutterActivity() {
     private fun toggleHotspot(enable: Boolean): String {
         Log.d("HOTSPOT_DEBUG", "Toggling Hotspot: $enable")
         
-        // 1. فحص صلاحية تعديل إعدادات النظام
+        // تم تصحيح الوصول هنا بحذف context()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (!android.provider.Settings.System.canWrite(context)) {
+            if (!android.provider.Settings.System.canWrite(this)) {
                 val intent = Intent(android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS)
-                intent.data = android.net.Uri.parse("package:" + context.packageName)
+                intent.data = android.net.Uri.parse("package:$packageName")
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
+                startActivity(intent)
                 return "NEED_PERMISSION_UI"
             }
         }
 
-        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        // استخدام applicationContext مباشرة
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         
-        // إيقاف الواي فاي قبل تشغيل الهوتسبوت
         if (enable) wifiManager.isWifiEnabled = false
 
-        // 2. محاولة تشغيل الهوتسبوت برمجياً (لأجهزة الأندرويد القديمة والمتوسطة)
         val methods = wifiManager.javaClass.methods
         for (method in methods) {
             if (method.name == "setWifiApEnabled") {
@@ -75,21 +74,19 @@ class MainActivity: FlutterActivity() {
             }
         }
         
-        // 3. الحل الأخير: فتح صفحة الإعدادات مباشرة (لأجهزة أندرويد الحديثة)
         return try {
             val intent = Intent(Intent.ACTION_MAIN)
             intent.setClassName("com.android.settings", "com.android.settings.TetherSettings")
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
+            startActivity(intent)
             "OPENED_SETTINGS"
         } catch (e: Exception) {
             "ERROR: Could not find settings"
         }
     }
 
-    // الدالة التي كانت مفقودة وتسببت في الخطأ
     private fun getHotspotConfig(): String {
-        val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         return try {
             val method = wifiManager.javaClass.getMethod("getWifiApConfiguration")
             val config = method.invoke(wifiManager) as WifiConfiguration

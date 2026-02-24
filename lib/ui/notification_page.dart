@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class NotificationInboxPage extends StatefulWidget {
   final List<Map<String, String>> notifications;
@@ -20,20 +22,43 @@ class NotificationInboxPage extends StatefulWidget {
 class _NotificationInboxPageState extends State<NotificationInboxPage> {
   String _searchQuery = "";
   String _filterType = "الكل";
+  // متغير داخلي للتحكم في القائمة المحدثة
+  late List<Map<String, String>> _currentNotifications;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentNotifications = List.from(widget.notifications);
+  }
+
+  // دالة لتحديث القائمة يدوياً من الذاكرة إذا تم المسح من الخارج
+  Future<void> _refreshFromPrefs() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? carID = prefs.getString('car_id');
+    if (carID != null) {
+      String? saved = prefs.getString('saved_notifs_$carID');
+      if (saved == null || saved.isEmpty) {
+        setState(() {
+          _currentNotifications = [];
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    // التحقق من حالة الثيم
+    // استدعاء التحديث عند بناء الواجهة للتأكد من المزامنة
+    _refreshFromPrefs();
+
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    final filteredList = widget.notifications.where((notif) {
+    final filteredList = _currentNotifications.where((notif) {
       final matchesSearch = notif['message']!.toLowerCase().contains(_searchQuery.toLowerCase());
       final matchesFilter = _filterType == "الكل" || notif['type'] == _filterType;
       return matchesSearch && matchesFilter;
     }).toList();
 
     return Scaffold(
-      // خلفية تتغير حسب الوضع
       backgroundColor: isDark ? const Color(0xFF121212) : Colors.grey.shade50,
       appBar: AppBar(
         elevation: 0,
@@ -42,7 +67,7 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
         centerTitle: true,
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
-          if (widget.notifications.isNotEmpty)
+          if (_currentNotifications.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_sweep_outlined, size: 28),
               onPressed: _confirmClearAll,
@@ -83,7 +108,6 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
       child: Column(
         children: [
           TextField(
-            // لون الخط داخل البحث
             style: TextStyle(color: isDark ? Colors.white : Colors.black87),
             decoration: InputDecoration(
               hintText: "بحث في الرسائل...",
@@ -119,7 +143,7 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
 
   Widget _buildNotificationItem(Map<String, String> item, bool isDark) {
     bool isAlert = item['type'] == 'alert';
-    int originalIndex = widget.notifications.indexOf(item);
+    int originalIndex = _currentNotifications.indexOf(item);
 
     return Dismissible(
       key: Key(item['id'] ?? item.hashCode.toString()),
@@ -132,12 +156,15 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
       ),
       onDismissed: (direction) {
         widget.onDelete(originalIndex);
+        setState(() {
+          _currentNotifications.removeAt(originalIndex);
+        });
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("تم حذف الإشعار"), duration: Duration(seconds: 1)));
       },
       child: Card(
         margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 6),
         elevation: 2,
-        color: isDark ? const Color(0xFF1E1E1E) : Colors.white, // لون الكرت
+        color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(15),
           side: isAlert ? BorderSide(color: isDark ? Colors.red.withOpacity(0.5) : Colors.red.shade200, width: 1) : BorderSide.none,
@@ -162,7 +189,6 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
             style: TextStyle(
               fontWeight: isAlert ? FontWeight.bold : FontWeight.w500,
               fontSize: 15,
-              // لون الخط أبيض في الدارك مود
               color: isAlert 
                   ? (isDark ? Colors.redAccent : Colors.red.shade900) 
                   : (isDark ? Colors.white : Colors.black87),
@@ -180,7 +206,7 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
           ),
           onTap: () {
             if (item['lat'] != null && item['lat'] != "" && item['lat'] != "null") {
-              launchUrl(Uri.parse("https://www.google.com/maps/search/?api=1&query=${item['lat']},${item['lng']}"));
+              launchUrl(Uri.parse("http://maps.google.com/?q=${item['lat']},${item['lng']}"));
             }
           },
           trailing: item['lat'] != null && item['lat'] != "" && item['lat'] != "null"
@@ -221,7 +247,7 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
           Icon(Icons.notifications_off_outlined, size: 80, color: isDark ? Colors.grey.shade700 : Colors.grey.shade300),
           const SizedBox(height: 15),
           Text(_searchQuery.isEmpty ? "لا توجد إشعارات حالياً" : "لم يتم العثور على نتائج للبحث", 
-               style: TextStyle(color: isDark ? Colors.grey.shade500 : Colors.grey.shade500, fontSize: 16)),
+               style: TextStyle(color: Colors.grey.shade500, fontSize: 16)),
         ],
       ),
     );
@@ -242,7 +268,9 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
             onPressed: () {
               widget.onClearAll();
-              setState(() {});
+              setState(() {
+                _currentNotifications = [];
+              });
               Navigator.pop(context);
             },
             child: const Text("نعم، احذف", style: TextStyle(color: Colors.white)),

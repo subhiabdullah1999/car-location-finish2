@@ -1,3 +1,4 @@
+import 'package:car_location/ui/about_app.dart';
 import 'package:car_location/ui/developer_page.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -33,7 +34,7 @@ class _SettingsPageState extends State<SettingsPage> {
     });
   }
 
-  // دالة تغيير الثيم وحفظه (كودك الأصلي)
+  // دالة تغيير الثيم وحفظه
   void _toggleTheme(bool value) async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.setBool('dark_mode', value);
@@ -45,7 +46,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
   // دالة تفعيل/تعطيل قفل البصمة
   void _toggleBiometric(bool value) async {
-    // التأكد أولاً إذا كان الجهاز يدعم البصمة
     bool canCheck = await _auth.canCheckBiometrics || await _auth.isDeviceSupported();
     
     if (!canCheck && value == true) {
@@ -62,7 +62,7 @@ class _SettingsPageState extends State<SettingsPage> {
     });
   }
 
-  // مسح سجل الإشعارات (الميزة المضافة سابقاً)
+  // مسح سجل الإشعارات (تم التعديل لضمان التحديث الفوري)
   void _clearNotifications() async {
     showDialog(
       context: context,
@@ -75,12 +75,16 @@ class _SettingsPageState extends State<SettingsPage> {
             onPressed: () async {
               SharedPreferences prefs = await SharedPreferences.getInstance();
               String? carID = prefs.getString('car_id');
+              
               await prefs.remove('saved_notifs_$carID');
               await prefs.setInt('unread_count_$carID', 0);
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("تم مسح السجل وتصفير العداد"))
-              );
+              
+              if (mounted) {
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("تم مسح السجل وتصفير العداد بنجاح"))
+                );
+              }
             }, 
             child: const Text("حذف الآن", style: TextStyle(color: Colors.red))
           ),
@@ -89,7 +93,7 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  // تغيير معرف السيارة (الميزة المضافة سابقاً)
+  // تغيير معرف السيارة
   void _resetCarID() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.remove('car_id');
@@ -129,7 +133,7 @@ class _SettingsPageState extends State<SettingsPage> {
           children: [
             const SizedBox(height: 20),
             
-            // 1. كرت الوضع الداكن (كودك الأصلي)
+            // 1. كرت الوضع الداكن
             Card(
               margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -145,7 +149,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
 
-            // 2. كرت قفل البصمة (الميزة الجديدة)
+            // 2. كرت قفل البصمة
             Card(
               margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -181,6 +185,18 @@ class _SettingsPageState extends State<SettingsPage> {
               _resetCarID
             ),
 
+            // 5. ميزة "حول التطبيق" الجديدة
+            _buildOption(
+              Icons.info_outline_rounded, 
+              "حول التطبيق", 
+              "تعرف على مهام ونظام HASBA TRACKER", 
+              Colors.blueGrey, 
+              () {
+                Navigator.push(context, MaterialPageRoute(builder: (context) => const AboutAppPage()));
+              }
+            ),
+
+            // كرت مطور التطبيق
             _buildOption(
               Icons.code_rounded, 
               "مطور التطبيق", 
@@ -193,23 +209,23 @@ class _SettingsPageState extends State<SettingsPage> {
 
             const SizedBox(height: 10),
 
-            // 5. الدعم الفني
+            // 6. الدعم الفني
             _buildOption(
               Icons.support_agent_outlined, 
               "الدعم الفني", 
               "تواصل معنا للمساعدة عبر واتساب", 
               Colors.orange, 
-              () => launchUrl(Uri.parse("https://wa.me/your_number")) 
+              () => launchUrl(Uri.parse("https://wa.me/+905396617266")) 
             ),
 
             const SizedBox(height: 10),
 
-            // 6. كرت معلومات التطبيق (كودك الأصلي)
+            // 7. كرت إصدار التطبيق
             Card(
               margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
               child: const ListTile(
-                leading: Icon(Icons.info_outline, color: Colors.grey),
+                leading: Icon(Icons.verified_outlined, color: Colors.grey),
                 title: Text("إصدار التطبيق"),
                 trailing: Text("v2.5.0", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
               ),
@@ -228,3 +244,4 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 }
+
