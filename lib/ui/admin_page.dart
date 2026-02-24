@@ -36,6 +36,9 @@ class _AdminPageState extends State<AdminPage> {
 
   List<Map<String, String>> _allNotifications = [];
   String? _lastMessageId; 
+  
+  // عداد الإشعارات غير المقروءة
+  int _unreadCount = 0; 
 
   final List<int> _sensitivityLevels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100];
 
@@ -46,6 +49,12 @@ class _AdminPageState extends State<AdminPage> {
     _loadSavedNumbers();
   }
 
+  // دالة لحفظ العداد في الذاكرة
+  void _saveUnreadCount() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('unread_count_$_carID', _unreadCount);
+  }
+
   void _loadSavedNumbers() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     _carID = prefs.getString('car_id');
@@ -53,8 +62,10 @@ class _AdminPageState extends State<AdminPage> {
     if (_carID != null) {
       _listenToStatus();
       _loadNotificationsFromDisk();
-
+      
+      // تحميل العداد المحفوظ عند فتح التطبيق
       setState(() {
+        _unreadCount = prefs.getInt('unread_count_$_carID') ?? 0;
         _n1.text = prefs.getString('num1_$_carID') ?? "";
         _n2.text = prefs.getString('num2_$_carID') ?? "";
         _n3.text = prefs.getString('num3_$_carID') ?? "";
@@ -136,6 +147,9 @@ class _AdminPageState extends State<AdminPage> {
         'lng': d['lng']?.toString() ?? "",
         'timestamp': d['timestamp']?.toString() ?? "0",
       });
+      // زيادة العداد وحفظه في الذاكرة
+      _unreadCount++; 
+      _saveUnreadCount();
       _saveNotificationsToDisk();
     });
 
@@ -200,6 +214,11 @@ class _AdminPageState extends State<AdminPage> {
       IconButton(
         icon: const Icon(Icons.notifications_active, color: Colors.white),
         onPressed: () {
+          // تصفير العداد وحفظ الحالة الجديدة في الذاكرة
+          setState(() {
+            _unreadCount = 0;
+            _saveUnreadCount();
+          });
           Navigator.push(context, MaterialPageRoute(builder: (context) => NotificationInboxPage(
             notifications: _allNotifications,
             onDelete: (index) { setState(() { _allNotifications.removeAt(index); _saveNotificationsToDisk(); }); },
@@ -207,13 +226,33 @@ class _AdminPageState extends State<AdminPage> {
           )));
         },
       ),
-      if (_allNotifications.isNotEmpty)
-        Positioned(right: 8, top: 8, child: Container(padding: const EdgeInsets.all(2), decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(10)), constraints: const BoxConstraints(minWidth: 16, minHeight: 16), child: Text('${_allNotifications.length}', style: const TextStyle(color: Colors.white, fontSize: 10), textAlign: TextAlign.center))),
+      if (_unreadCount > 0)
+        Positioned(
+          right: 8, 
+          top: 8, 
+          child: Container(
+            padding: const EdgeInsets.all(2), 
+            decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(10)), 
+            constraints: const BoxConstraints(minWidth: 16, minHeight: 16), 
+            child: Text(
+              '$_unreadCount', 
+              style: const TextStyle(color: Colors.white, fontSize: 10), 
+              textAlign: TextAlign.center
+            )
+          )
+        ),
     ],
   );
 
   Widget _statusWidget(bool isDark) => InkWell(
-    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => NotificationInboxPage(notifications: _allNotifications, onDelete: (i){}, onClearAll: (){}))),
+    onTap: () {
+      // تصفير العداد عند الدخول من شريط الحالة وحفظ التغيير
+      setState(() {
+        _unreadCount = 0;
+        _saveUnreadCount();
+      });
+      Navigator.push(context, MaterialPageRoute(builder: (context) => NotificationInboxPage(notifications: _allNotifications, onDelete: (i){}, onClearAll: (){})));
+    },
     child: Container(
       padding: const EdgeInsets.all(20), margin: const EdgeInsets.all(15),
       decoration: BoxDecoration(

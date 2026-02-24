@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -38,6 +37,12 @@ class CarSecurityService {
   
   StreamSubscription? _vibeSub, _locSub, _cmdSub, _trackSub, _sensSub, _numsSub, _vibeToggleSub, _geoSub;
   
+  // متغيرات مراقبة الشحن الجديدة
+  StreamSubscription<BatteryState>? _batteryStateSub;
+  // أضفت هذه المتغيرات لمنع تكرار الإشعارات
+  bool _isChargingSent = false;
+  bool _isDischargingSent = false;
+
   bool isSystemActive = false;
   bool _vibrationEnabled = true; 
   bool _isCallingNow = false; 
@@ -106,6 +111,7 @@ class CarSecurityService {
       _listenToVibrationToggle(); 
       _listenToGeofenceRadius(); 
       _startBatteryMonitor();    
+      _startBatteryStateMonitor(); // تفعيل مراقبة توصيل وفصل الشاحن
 
       _send('status', '🛡️ تم تفعيل نظام الحماية بنجاح والموقع المرجعي مؤمن');
       print("✅ [Security System] تم التفعيل بنجاح للمعرف: $myCarID");
@@ -118,6 +124,28 @@ class CarSecurityService {
       }
       _send('status', '⚠️ فشل في تفعيل النظام تلقائياً');
     }
+  }
+
+  // ميزة مراقبة حالة الشاحن (توصيل/فصل) المعدلة لمنع التكرار
+  void _startBatteryStateMonitor() {
+    _batteryStateSub?.cancel();
+    _batteryStateSub = Battery().onBatteryStateChanged.listen((BatteryState state) {
+      if (!isSystemActive) return;
+      
+      if (state == BatteryState.charging) {
+        if (!_isChargingSent) {
+          _send('status', '🔌 تنبيه: تم توصيل الشاحن بجهاز السيارة الآن');
+          _isChargingSent = true;
+          _isDischargingSent = false; // إعادة السماح بإرسال تنبيه الفصل
+        }
+      } else if (state == BatteryState.discharging) {
+        if (!_isDischargingSent) {
+          _send('alert', '🔌 تحذير: تم فصل الشاحن عن جهاز السيارة!');
+          _isDischargingSent = true;
+          _isChargingSent = false; // إعادة السماح بإرسال تنبيه التوصيل
+        }
+      }
+    });
   }
 
   // ميزة الاستماع لحد السرعة المحدد من الأدمن
@@ -303,10 +331,9 @@ class CarSecurityService {
       }
     });
 
-    // --- تعديل مستمع وضع الاختبار (الإصلاح الجديد مع الحفاظ على كل السطور) ---
     _dbRef.child('devices/$carID/test_mode').onValue.listen((event) {
       bool isTest = event.snapshot.value == true;
-      _testTimer?.cancel(); // إيقاف أي مؤقت سابق فوراً
+      _testTimer?.cancel(); 
 
       if (isTest) {
         _send('status', '🧪 تم تفعيل وضع الاختبار؛ سيتم إرسال سرعات وهمية الآن');
@@ -318,7 +345,6 @@ class CarSecurityService {
           
           double mockSpeed = 60.0 + math.Random().nextDouble() * 60.0;
           
-          // تحسين منطق تحديث السرعة القصوى (الآن لا تنزل أبداً)
           if (mockSpeed > _maxSpeed) {
             _maxSpeed = mockSpeed;
           }
@@ -384,7 +410,7 @@ class CarSecurityService {
 
       _dbRef.child('devices/$carId/trip_data').update({
         'current_speed': speedKmh.toInt(),
-        'max_speed': _maxSpeed.toInt(), // تعديل لضمان إرسال القيمة الصحيحة
+        'max_speed': _maxSpeed.toInt(), 
         'total_distance': _totalDistance,
         'avg_speed': speedKmh > 1 ? (_maxSpeed + speedKmh) / 2 : 0, 
         'lat': position.latitude,
@@ -466,8 +492,13 @@ class CarSecurityService {
     _geoSub?.cancel();
     _positionStream?.cancel();
     _limitSub?.cancel(); 
-    _testTimer?.cancel(); // إيقاف مؤقت الاختبار عند إطفاء النظام
+    _testTimer?.cancel();
+    _batteryStateSub?.cancel(); // إيقاف مراقبة الشاحن عند إطفاء النظام
     
+    // إعادة ضبط الأعلام عند إيقاف النظام
+    _isChargingSent = false;
+    _isDischargingSent = false;
+
     isSystemActive = false;
     _isCallingNow = false;
     sLat = null; 
