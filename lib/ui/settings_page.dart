@@ -5,7 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:car_location/main.dart'; 
 import 'package:car_location/ui/type_selctor_page.dart'; 
 import 'package:url_launcher/url_launcher.dart';
-import 'package:local_auth/local_auth.dart'; // المكتبة الجديدة للبصمة
+import 'package:local_auth/local_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -16,8 +17,9 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   bool _isDarkMode = false;
-  bool _isBiometricEnabled = false; // حالة قفل البصمة
+  bool _isBiometricEnabled = false; 
   final LocalAuthentication _auth = LocalAuthentication();
+  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
 
   @override
   void initState() {
@@ -25,7 +27,6 @@ class _SettingsPageState extends State<SettingsPage> {
     _loadSettings();
   }
 
-  // تحميل كافة الإعدادات المحفوظة
   void _loadSettings() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     setState(() {
@@ -34,7 +35,6 @@ class _SettingsPageState extends State<SettingsPage> {
     });
   }
 
-  // دالة تغيير الثيم وحفظه
   void _toggleTheme(bool value) async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.setBool('dark_mode', value);
@@ -44,7 +44,6 @@ class _SettingsPageState extends State<SettingsPage> {
     themeNotifier.value = value ? ThemeMode.dark : ThemeMode.light;
   }
 
-  // دالة تفعيل/تعطيل قفل البصمة
   void _toggleBiometric(bool value) async {
     bool canCheck = await _auth.canCheckBiometrics || await _auth.isDeviceSupported();
     
@@ -62,7 +61,6 @@ class _SettingsPageState extends State<SettingsPage> {
     });
   }
 
-  // مسح سجل الإشعارات (تم التعديل لضمان التحديث الفوري)
   void _clearNotifications() async {
     showDialog(
       context: context,
@@ -93,7 +91,6 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  // تغيير معرف السيارة
   void _resetCarID() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.remove('car_id');
@@ -103,6 +100,92 @@ class _SettingsPageState extends State<SettingsPage> {
         (route) => false
       );
     }
+  }
+
+  // --- دالة الحذف النهائي المحدثة مع إيقاف النظام ---
+ void _deleteCarFromDatabase() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? carID = prefs.getString('car_id');
+
+    if (carID == null) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("⚠️ حذف نهائي وشامل", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("سيتم إيقاف النظام وتصفير كافة البيانات (الأرقام، المواقع، الإعدادات) ثم حذفها نهائياً من السيرفر."),
+            const SizedBox(height: 10),
+            Text("معرف السيارة: $carID", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blueGrey)),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("إلغاء")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () async {
+              try {
+                // 1. إرسال أمر إيقاف فوري (Command 6)
+                await _dbRef.child('devices/$carID/commands').set({
+                  'id': 6,
+                  'timestamp': ServerValue.timestamp,
+                });
+
+                // 2. تصفير الحقول الحساسة أولاً لضمان عدم استرجاعها من الذاكرة المؤقتة
+                // نقوم بوضع قيم فارغة للأرقام والإعدادات
+                await _dbRef.child('devices/$carID').update({
+                  'numbers': null,
+                  'trip_data': null,
+                  'responses': null,
+                  'system_active_status': false,
+                  'vibration_enabled': false,
+                });
+
+                // انتظار بسيط لضمان تنفيذ التحديثات في السيرفر
+                await Future.delayed(const Duration(milliseconds: 800));
+
+                // 3. الحذف النهائي والجذري للعقدة بالكامل
+                await _dbRef.child('devices/$carID').remove();
+                
+                // 4. مسح كافة البيانات المحلية من هاتف الأدمن
+                await prefs.remove('car_id');
+                await prefs.remove('saved_notifs_$carID');
+                await prefs.remove('unread_count_$carID');
+                await prefs.setBool('was_system_active', false);
+                
+                // تذكير: يجب مسح أي بيانات أخرى متعلقة بالإشعارات لضمان التصفير الشامل
+                final allKeys = prefs.getKeys();
+                for (String key in allKeys) {
+                  if (key.contains(carID)) {
+                    await prefs.remove(key);
+                  }
+                }
+
+                if (mounted) {
+                  Navigator.pop(ctx);
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (context) => const AppTypeSelector()), 
+                    (route) => false
+                  );
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("تم تطهير وحذف كافة بيانات السيارة بنجاح"))
+                  );
+                }
+              } catch (e) {
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text("خطأ أثناء التطهير: $e"))
+                );
+              }
+            }, 
+            child: const Text("تأكيد الحذف النهائي", style: TextStyle(color: Colors.white))
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildOption(IconData icon, String title, String subtitle, Color color, VoidCallback onTap) {
@@ -133,7 +216,7 @@ class _SettingsPageState extends State<SettingsPage> {
           children: [
             const SizedBox(height: 20),
             
-            // 1. كرت الوضع الداكن
+            // كرت الوضع الداكن
             Card(
               margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -149,7 +232,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
 
-            // 2. كرت قفل البصمة
+            // كرت قفل البصمة
             Card(
               margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -167,7 +250,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
             const Divider(height: 30, indent: 20, endIndent: 20),
 
-            // 3. إدارة البيانات
+            // إدارة البيانات
             _buildOption(
               Icons.delete_sweep_outlined, 
               "إدارة البيانات", 
@@ -176,7 +259,7 @@ class _SettingsPageState extends State<SettingsPage> {
               _clearNotifications
             ),
 
-            // 4. تغيير السيارة
+            // تغيير السيارة
             _buildOption(
               Icons.directions_car_filled_outlined, 
               "تغيير السيارة", 
@@ -185,7 +268,16 @@ class _SettingsPageState extends State<SettingsPage> {
               _resetCarID
             ),
 
-            // 5. ميزة "حول التطبيق" الجديدة
+            // حذف السيارة نهائياً (الميزة الجديدة)
+            _buildOption(
+              Icons.no_crash_outlined, 
+              "حذف السيارة نهائياً", 
+              "إيقاف النظام وإزالة البيانات من السيرفر", 
+              Colors.red, 
+              _deleteCarFromDatabase
+            ),
+
+            // حول التطبيق
             _buildOption(
               Icons.info_outline_rounded, 
               "حول التطبيق", 
@@ -196,7 +288,7 @@ class _SettingsPageState extends State<SettingsPage> {
               }
             ),
 
-            // كرت مطور التطبيق
+            // مطور التطبيق
             _buildOption(
               Icons.code_rounded, 
               "مطور التطبيق", 
@@ -209,7 +301,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
             const SizedBox(height: 10),
 
-            // 6. الدعم الفني
+            // الدعم الفني
             _buildOption(
               Icons.support_agent_outlined, 
               "الدعم الفني", 
@@ -220,7 +312,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
             const SizedBox(height: 10),
 
-            // 7. كرت إصدار التطبيق
+            // كرت إصدار التطبيق
             Card(
               margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -244,4 +336,3 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 }
-
