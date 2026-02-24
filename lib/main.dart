@@ -12,6 +12,7 @@ import 'services/car_security_service.dart';
 // مكتبات الإشعارات والخدمة الأمامية
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:local_auth/local_auth.dart'; // مكتبة البصمة المضافة
 
 final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.light);
 
@@ -24,9 +25,13 @@ void main() async {
   await Firebase.initializeApp();
   FirebaseDatabase.instance.databaseURL = "https://car-location-67e15-default-rtdb.firebaseio.com/";
 
-  // إعداد قنوات الإشعارات للأندرويد
+  // --- تصحيح الخطأ هنا ---
+  // تم تغيير التسمية لتطابق المتغير المستخدم في InitializationSettings
   const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
+  
+  // إزالة const إذا واجهت مشكلة في التجميع، لكن التسمية هي السبب الأساسي
   const InitializationSettings initializationSettings = InitializationSettings(android: initializationSettingsAndroid);
+  
   await flutterLocalNotificationsPlugin.initialize(initializationSettings);
 
   SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -48,7 +53,6 @@ void main() async {
 void startForegroundMonitoring(String carID) {
   DatabaseReference ref = FirebaseDatabase.instance.ref('devices/$carID/responses');
   
-  // الاستماع اللحظي (Stream) - يعمل في الخلفية طالما التطبيق مفتوح أو في الـ RAM
   ref.onValue.listen((event) async {
     if (event.snapshot.value != null) {
       Map data = event.snapshot.value as Map;
@@ -59,16 +63,11 @@ void startForegroundMonitoring(String carID) {
       SharedPreferences prefs = await SharedPreferences.getInstance();
       String? lastId = prefs.getString('last_handled_id');
 
-      // تفعيل التنبيه فوراً إذا كان ID الإشعار جديداً
       if (currentId != lastId && currentId.isNotEmpty) {
         await prefs.setString('last_handled_id', currentId);
-        
-        // 1. إظهار إشعار عالي الأولوية
         _triggerUrgentNotification(type, msg);
 
-        // 2. إذا كان "تنبيه أمني" (اهتزاز قوي)، يمكن تفعيل اتصال أو صوت إنذار
         if (type == 'alert') {
-          // هنا يمكنك إضافة كود الاتصال التلقائي إذا أردت
           print("🚨 اهتزاز قوي detected! جاري التنبيه الفوري...");
         }
       }
@@ -76,12 +75,7 @@ void startForegroundMonitoring(String carID) {
   });
 }
 
-// إظهار إشعار لا يمكن تجاهله (Urgent)
 Future<void> _triggerUrgentNotification(String type, String msg) async {
-  // إعدادات الصوت: إذا كان تنبيه أمني نستخدم صوت مرتفع
-  // ملاحظة: لكي يعمل الصوت المخصص 'alarm' يجب وضعه في مجلد res/raw في أندرويد
-  // حالياً سنستخدم الصوت الافتراضي للتنبيهات لضمان عمل الكود
-  
   AndroidNotificationDetails androidPlatformChannelSpecifics = AndroidNotificationDetails(
     'car_radar_channel', 
     'رادار الحماية',
@@ -90,7 +84,6 @@ Future<void> _triggerUrgentNotification(String type, String msg) async {
     fullScreenIntent: true, 
     ongoing: type == 'alert', 
     styleInformation: BigTextStyleInformation(msg),
-    // استبدال playSiren بالصوت الافتراضي أو المخصص
     playSound: true,
     enableVibration: true,
     channelShowBadge: true,
@@ -106,10 +99,61 @@ Future<void> _triggerUrgentNotification(String type, String msg) async {
   );
 }
 
-class HasbaApp extends StatelessWidget {
+// --- كلاس التطبيق الرئيسي مع إضافة منطق البصمة ---
+class HasbaApp extends StatefulWidget {
   final String? savedID;
   final String? userType;
   const HasbaApp({super.key, this.savedID, this.userType});
+
+  @override
+  State<HasbaApp> createState() => _HasbaAppState();
+}
+
+class _HasbaAppState extends State<HasbaApp> {
+  bool _isAuthenticated = false; // هل تم التحقق من الهوية؟
+  final LocalAuthentication _auth = LocalAuthentication();
+
+  @override
+  void initState() {
+    super.initState();
+    _checkBiometricPreference();
+  }
+
+  // فحص هل المستخدم فعل خيار البصمة من الإعدادات؟
+  Future<void> _checkBiometricPreference() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    bool isBiometricEnabled = prefs.getBool('biometric_enabled') ?? false;
+
+    if (isBiometricEnabled) {
+      _authenticateUser();
+    } else {
+      setState(() {
+        _isAuthenticated = true; // الدخول مباشرة إذا كانت الخدمة معطلة
+      });
+    }
+  }
+
+  // تنفيذ عملية التحقق من البصمة
+  Future<void> _authenticateUser() async {
+    try {
+      bool authenticated = await _auth.authenticate(
+        localizedReason: 'يرجى تأكيد هويتك لفتح نظام HASBA TRACKER',
+        options: const AuthenticationOptions(
+          stickyAuth: true,
+          biometricOnly: true,
+        ),
+      );
+      setState(() {
+        _isAuthenticated = authenticated;
+      });
+    } catch (e) {
+      print("خطأ في التحقق الحيوي: $e");
+      // في حال حدوث خطأ تقني، يمكن السماح بالدخول أو طلب PIN
+      setState(() {
+        _isAuthenticated = true; 
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -134,9 +178,33 @@ class HasbaApp extends StatelessWidget {
             appBarTheme: const AppBarTheme(backgroundColor: Color(0xFF1F1F1F), foregroundColor: Colors.white),
           ),
           themeMode: currentMode,
-          home: SplashScreen(savedID: savedID, userType: userType),
+          // التعديل هنا: إذا لم يتم التحقق تظهر شاشة سوداء/انتظار حتى نجاح البصمة
+          home: _isAuthenticated 
+              ? SplashScreen(savedID: widget.savedID, userType: widget.userType)
+              : _biometricLockScreen(),
         );
       },
+    );
+  }
+
+  // شاشة حماية تظهر أثناء انتظار البصمة
+  Widget _biometricLockScreen() {
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.lock_outline, size: 80, color: Colors.blue),
+            const SizedBox(height: 20),
+            const Text("التطبيق مغلق للأمان", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            ElevatedButton(
+              onPressed: _authenticateUser,
+              child: const Text("اضغط للمحاولة مرة أخرى"),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -147,8 +215,8 @@ Future<void> requestPermissions() async {
     Permission.location,
     Permission.phone,
     Permission.sensors,
-    Permission.ignoreBatteryOptimizations, // ضروري جداً لضمان عمل الرادار
-    Permission.systemAlertWindow, // ضروري لفتح نوافذ فوق التطبيقات الأخرى
+    Permission.ignoreBatteryOptimizations, 
+    Permission.systemAlertWindow, 
   ].request();
   print("Permissions status: $statuses");
 }

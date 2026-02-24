@@ -53,6 +53,8 @@ dependencies:
   fl_chart: ^0.70.0
   flutter_map: ^6.1.0
   latlong2: 
+  local_auth:
+  qr_flutter:
   
   
   
