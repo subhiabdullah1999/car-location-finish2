@@ -20,15 +20,13 @@ class CarSecurityService {
   double _totalDistance = 0.0;
   Position? _lastPosition;
   StreamSubscription<Position>? _positionStream;
-  bool _isTestMode = false; // فعله لتجربة العداد بدون حركة
+  bool _isTestMode = false; 
   
   // --- ميزة تنبيه تجاوز السرعة الجديدة ---
-  double _speedLimit = 90.0; // الحد الافتراضي
-  bool _speedAlertSent = false; // لمنع تكرار الإشعارات
+  double _speedLimit = 90.0; 
+  bool _speedAlertSent = false; 
   StreamSubscription? _limitSub;
-  // ----------------------------------------
 
-  // متغير مضاف للتحكم في مؤقت وضع الاختبار بدقة
   Timer? _testTimer;
 
   CarSecurityService._internal();
@@ -37,9 +35,7 @@ class CarSecurityService {
   
   StreamSubscription? _vibeSub, _locSub, _cmdSub, _trackSub, _sensSub, _numsSub, _vibeToggleSub, _geoSub;
   
-  // متغيرات مراقبة الشحن الجديدة
   StreamSubscription<BatteryState>? _batteryStateSub;
-  // أضفت هذه المتغيرات لمنع تكرار الإشعارات
   bool _isChargingSent = false;
   bool _isDischargingSent = false;
 
@@ -103,7 +99,7 @@ class CarSecurityService {
         await _dbRef.child('devices/$myCarID/system_active_status').set(true);
         await _dbRef.child('devices/$myCarID/vibration_enabled').set(true);
         await prefs.setBool('was_system_active', true);
-        _listenToSpeedLimit(); // تفعيل الاستماع لحد السرعة عند بدء النظام
+        _listenToSpeedLimit();
       }
 
       _startSensors();          
@@ -111,7 +107,7 @@ class CarSecurityService {
       _listenToVibrationToggle(); 
       _listenToGeofenceRadius(); 
       _startBatteryMonitor();    
-      _startBatteryStateMonitor(); // تفعيل مراقبة توصيل وفصل الشاحن
+      _startBatteryStateMonitor();
 
       _send('status', '🛡️ تم تفعيل نظام الحماية بنجاح والموقع المرجعي مؤمن');
       print("✅ [Security System] تم التفعيل بنجاح للمعرف: $myCarID");
@@ -126,7 +122,6 @@ class CarSecurityService {
     }
   }
 
-  // ميزة مراقبة حالة الشاحن (توصيل/فصل) المعدلة لمنع التكرار
   void _startBatteryStateMonitor() {
     _batteryStateSub?.cancel();
     _batteryStateSub = Battery().onBatteryStateChanged.listen((BatteryState state) {
@@ -136,19 +131,18 @@ class CarSecurityService {
         if (!_isChargingSent) {
           _send('status', '🔌 تنبيه: تم توصيل الشاحن بجهاز السيارة الآن');
           _isChargingSent = true;
-          _isDischargingSent = false; // إعادة السماح بإرسال تنبيه الفصل
+          _isDischargingSent = false;
         }
       } else if (state == BatteryState.discharging) {
         if (!_isDischargingSent) {
           _send('alert', '🔌 تحذير: تم فصل الشاحن عن جهاز السيارة!');
           _isDischargingSent = true;
-          _isChargingSent = false; // إعادة السماح بإرسال تنبيه التوصيل
+          _isChargingSent = false;
         }
       }
     });
   }
 
-  // ميزة الاستماع لحد السرعة المحدد من الأدمن
   void _listenToSpeedLimit() {
     if (myCarID == null) return;
     _limitSub = _dbRef.child('devices/$myCarID/speed_limit').onValue.listen((event) {
@@ -275,6 +269,7 @@ class CarSecurityService {
             break;
 
           case 1:
+            // تعديل: جلب الموقع الحقيقي من جهاز السيارة حصراً
             if (isSystemActive) {
               await sendLocation();
             } else {
@@ -283,6 +278,7 @@ class CarSecurityService {
             break;
 
           case 2:
+            // تعديل: جلب نسبة بطارية جهاز السيارة حصراً
             await sendBattery();
             break;
 
@@ -296,18 +292,20 @@ class CarSecurityService {
             break;
 
           case 8:
+            // تعديل: تصفير الحساسات وضمان إعادة تعيين الموقع المرجعي
             _send('status', '🔄 جاري تصفير الحساسات وإعادة التشغيل...');
             await stopSecuritySystem();
-            await Future.delayed(const Duration(seconds: 3));
+            sLat = null; // مسح الإحداثيات المرجعية القديمة
+            sLng = null;
+            await Future.delayed(const Duration(seconds: 4));
             await initSecuritySystem();
-            _send('status', '✅ تمت إعادة التشغيل بنجاح؛ النظام الآن نشط');
+            _send('status', '✅ تمت إعادة التشغيل بنجاح وتأمين النطاق الجديد');
             break;
 
         case 9:
             _send('status', '🌐 جاري فتح إعدادات الشبكة في السيارة...');
             try {
               final String result = await platform.invokeMethod('enableHotspot');
-              
               if (result == "SUCCESS") {
                 final String details = await platform.invokeMethod('getHotspotDetails');
                 _send('status', '✅ تم التفعيل بنجاح\n$details');
@@ -459,11 +457,16 @@ class CarSecurityService {
 
   void _send(String t, String m, {double? lat, double? lng}) async {
     if (myCarID == null) return;
+    
+    // جلب مستوى بطارية جهاز السيارة الحقيقي
     int batteryLevel = await Battery().batteryLevel;
+    
     DateTime now = DateTime.now();
     String formattedTime = "${now.hour}:${now.minute.toString().padLeft(2, '0')}";
     String formattedDate = "${now.year}/${now.month}/${now.day}";
-    String finalMessage = "$m\n🔋 $batteryLevel% | 🕒 $formattedTime | 📅 $formattedDate";
+    
+    // تعديل الرسالة لضمان وضوح مصدر البيانات (جهاز السيارة)
+    String finalMessage = "$m\n🔋 بطارية السيارة: $batteryLevel% | 🕒 $formattedTime | 📅 $formattedDate";
 
     String uniqueMsgId = DateTime.now().millisecondsSinceEpoch.toString();
 
@@ -471,7 +474,7 @@ class CarSecurityService {
       'id': uniqueMsgId,
       'type': t, 
       'message': finalMessage, 
-      'lat': lat, 
+      'lat': lat, // الموقع الذي يرسله جهاز السيارة
       'lng': lng, 
       'timestamp': ServerValue.timestamp
     });
@@ -493,14 +496,14 @@ class CarSecurityService {
     _positionStream?.cancel();
     _limitSub?.cancel(); 
     _testTimer?.cancel();
-    _batteryStateSub?.cancel(); // إيقاف مراقبة الشاحن عند إطفاء النظام
+    _batteryStateSub?.cancel(); 
     
-    // إعادة ضبط الأعلام عند إيقاف النظام
     _isChargingSent = false;
     _isDischargingSent = false;
 
     isSystemActive = false;
     _isCallingNow = false;
+    // تم الإبقاء على تصفير الموقع لضمان إعادة المعايرة عند التشغيل القادم
     sLat = null; 
     sLng = null;
 
@@ -512,15 +515,17 @@ class CarSecurityService {
       await prefs.setBool('was_system_active', false);
     }
     
-    _send('status', '🔓 تم إيقاف النظام وتنظيف الذاكرة');
+    _send('status', '🔓 تم إيقاف النظام وتنظيف الحساسات');
   }
 
   Future<void> sendLocation() async {
+    // جلب الموقع الحالي لجهاز السيارة
     Position p = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
-    _send('location', '📍 تم تحديث الموقع بنجاح', lat: p.latitude, lng: p.longitude);
+    _send('location', '📍 تحديث موقع السيارة الحالي', lat: p.latitude, lng: p.longitude);
   }
 
   Future<void> sendBattery() async {
-    _send('battery', '🔋 تحديث حالة الطاقة');
+    // سيتم إرسال البطارية تلقائياً ضمن دالة _send
+    _send('battery', '🔋 تحديث حالة طاقة السيارة');
   }
 }

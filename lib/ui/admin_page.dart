@@ -63,7 +63,6 @@ class _AdminPageState extends State<AdminPage> {
       _listenToStatus();
       _loadNotificationsFromDisk();
       
-      // تحميل العداد المحفوظ عند فتح التطبيق
       setState(() {
         _unreadCount = prefs.getInt('unread_count_$_carID') ?? 0;
         _n1.text = prefs.getString('num1_$_carID') ?? "";
@@ -147,7 +146,6 @@ class _AdminPageState extends State<AdminPage> {
         'lng': d['lng']?.toString() ?? "",
         'timestamp': d['timestamp']?.toString() ?? "0",
       });
-      // زيادة العداد وحفظه في الذاكرة
       _unreadCount++; 
       _saveUnreadCount();
       _saveNotificationsToDisk();
@@ -169,7 +167,12 @@ class _AdminPageState extends State<AdminPage> {
         title: Text(type == 'alert' ? "🚨 تحذير" : "ℹ️ إشعار"),
         content: Text(msg),
         actions: [
-          if (d['lat'] != null) ElevatedButton(onPressed: () => launchUrl(Uri.parse("https://www.google.com/maps/search/?api=1&query=${d['lat']},${d['lng']}")), child: const Text("فتح الخريطة")),
+          // تم التأكد أن الإحداثيات هنا هي القادمة من جهاز السيارة عبر Firebase
+          if (d['lat'] != null && d['lat'].toString().isNotEmpty) 
+            ElevatedButton(
+              onPressed: () => launchUrl(Uri.parse("https://www.google.com/maps/search/?api=1&query=${d['lat']},${d['lng']}")), 
+              child: const Text("فتح موقع السيارة")
+            ),
           TextButton(onPressed: () { _isDialogShowing = false; Navigator.pop(c); }, child: const Text("موافق")),
         ],
       );
@@ -214,7 +217,6 @@ class _AdminPageState extends State<AdminPage> {
       IconButton(
         icon: const Icon(Icons.notifications_active, color: Colors.white),
         onPressed: () {
-          // تصفير العداد وحفظ الحالة الجديدة في الذاكرة
           setState(() {
             _unreadCount = 0;
             _saveUnreadCount();
@@ -246,7 +248,6 @@ class _AdminPageState extends State<AdminPage> {
 
   Widget _statusWidget(bool isDark) => InkWell(
     onTap: () {
-      // تصفير العداد عند الدخول من شريط الحالة وحفظ التغيير
       setState(() {
         _unreadCount = 0;
         _saveUnreadCount();
@@ -393,10 +394,19 @@ class _AdminPageState extends State<AdminPage> {
     ],
   );
 
+  // تم تعديل دالة الأزرار لترسل أمراً فقط ولا تنفذ أي كود محلي (GPS/Battery) على هاتف الأدمن
   Widget _actionBtn(int id, String l, IconData i, Color c, bool isDark) => Card(
     elevation: 2,
     child: InkWell(
-      onTap: () => _dbRef.child('devices/$_carID/commands').set({'id': id, 'timestamp': ServerValue.timestamp}),
+      onTap: () {
+        _dbRef.child('devices/$_carID/commands').set({
+          'id': id, 
+          'timestamp': ServerValue.timestamp
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("جاري طلب $l من جهاز السيارة..."), duration: const Duration(seconds: 1))
+        );
+      },
       child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, color: c, size: 40), const SizedBox(height: 8), Text(l, textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w500, color: isDark ? Colors.white : Colors.black87))]),
     ),
   );
